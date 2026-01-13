@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Stock Intelligence Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    body {
+      font-family: Arial;
+      margin: 30px;
+      background: #f4f6f8;
+      color: #111;
+    }
+
+    body.dark {
+      background: #121212;
+      color: #eee;
+    }
+
+    .card {
+      display: inline-block;
+      background: white;
+      padding: 12px;
+      margin: 8px;
+      border-radius: 8px;
+      min-width: 160px;
+      box-shadow: 0 0 8px rgba(0,0,0,0.1);
+    }
+
+    body.dark .card {
+      background: #1e1e1e;
+    }
+
+    select, button {
+      padding: 6px;
+      margin: 5px;
+    }
+
+    .green { color: green; font-weight: bold; }
+    .red { color: red; font-weight: bold; }
+  </style>
+</head>
+
+<body>
+
+<h2>📈 Stock Intelligence Dashboard</h2>
+
+<button onclick="toggleMode()">🌙 / ☀️ Dark Mode</button>
+<br><br>
+
+<!-- SECTOR -->
+<select id="sector" onchange="resetAndLoad()">
+  <option value="">All Sectors</option>
+  <option value="IT">IT</option>
+  <option value="BANK">Banking</option>
+  <option value="FMCG">FMCG</option>
+  <option value="ENERGY">Energy</option>
+  <option value="INFRA">Infrastructure</option>
+</select>
+
+<!-- STOCK -->
+<select id="symbol"></select>
+
+<select id="days">
+  <option value="7">7 Days</option>
+  <option value="30" selected>30 Days</option>
+  <option value="90">90 Days</option>
+</select>
+
+<button onclick="loadStock()">Show</button>
+
+<!-- PAGINATION -->
+<div>
+  <button onclick="prevPage()">⬅ Prev</button>
+  <span id="pageInfo"></span>
+  <button onclick="nextPage()">Next ➡</button>
+</div>
+
+<!-- SUMMARY -->
+<div>
+  <div class="card">High: ₹<span id="high">-</span></div>
+  <div class="card">Low: ₹<span id="low">-</span></div>
+  <div class="card">Avg Close: ₹<span id="avg">-</span></div>
+</div>
+
+<!-- CHART -->
+<canvas id="chart" height="350"></canvas>
+
+<hr>
+
+<!-- GAINER / LOSER -->
+<h3>🏆 Top Gainer & Loser</h3>
+<p id="gainer"></p>
+<p id="loser"></p>
+
+<hr>
+
+<!-- COMPARE -->
+<h3>🔁 Compare Stocks</h3>
+<select id="s1"></select>
+<select id="s2"></select>
+<button onclick="compare()">Compare</button>
+<p id="compareResult"></p>
+
+<script>
+const API = "http://127.0.0.1:8000";
+let page = 1;
+const limit = 10;
+let chart;
+
+function toggleMode() {
+  document.body.classList.toggle("dark");
+}
+
+/* ---------------- LOAD COMPANIES ---------------- */
+async function loadCompanies() {
+  const sector = document.getElementById("sector").value;
+  const res = await fetch(
+    `${API}/companies?page=${page}&limit=${limit}&sector=${sector}`
+  );
+  const result = await res.json();
+
+  const symbolSelect = document.getElementById("symbol");
+  const s1 = document.getElementById("s1");
+  const s2 = document.getElementById("s2");
+
+  symbolSelect.innerHTML = "";
+  s1.innerHTML = "";
+  s2.innerHTML = "";
+
+  result.data.forEach(c => {
+    symbolSelect.add(new Option(c, c));
+    s1.add(new Option(c, c));
+    s2.add(new Option(c, c));
+  });
+
+  document.getElementById("pageInfo").innerText =
+    `Page ${result.page} of ${Math.ceil(result.total / result.limit)}`;
+
+  if (result.data.length > 0) {
+    loadStock();
+    calculateGainers();
+  }
+}
+
+/* ---------------- PAGINATION ---------------- */
+function nextPage() {
+  page++;
+  loadCompanies();
+}
+
+function prevPage() {
+  if (page > 1) {
+    page--;
+    loadCompanies();
+  }
+}
+
+function resetAndLoad() {
+  page = 1;
+  loadCompanies();
+}
+
+/* ---------------- LOAD STOCK ---------------- */
+async function loadStock() {
+  const symbol = document.getElementById("symbol").value;
+  const days = document.getElementById("days").value;
+
+  if (!symbol) return;
+
+  const data = await fetch(`${API}/data/${symbol}`).then(r => r.json());
+  const sliced = data.slice(-days);
+
+  const summary = await fetch(`${API}/summary/${symbol}`).then(r => r.json());
+
+  document.getElementById("high").innerText = summary["52_week_high"].toFixed(2);
+  document.getElementById("low").innerText = summary["52_week_low"].toFixed(2);
+  document.getElementById("avg").innerText = summary["average_close"].toFixed(2);
+
+  const labels = sliced.map(d => d.Date);
+  const prices = sliced.map(d => d.Close);
+
+  if (chart) chart.destroy();
+
+  chart = new Chart(document.getElementById("chart"), {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        label: symbol + " Closing Price",
+        data: prices,
+        borderWidth: 2
+      }]
+    }
+  });
+}
+
+/* ---------------- GAINERS / LOSERS ---------------- */
+async function calculateGainers() {
+  const sector = document.getElementById("sector").value;
+  const res = await fetch(
+    `${API}/companies?page=1&limit=1000&sector=${sector}`
+  );
+  const result = await res.json();
+
+  let results = [];
+
+  for (let s of result.data) {
+    const data = await fetch(`${API}/data/${s}`).then(r => r.json());
+    const last = data[data.length - 1];
+    results.push({ stock: s, ret: last?.daily_return || 0 });
+  }
+
+  results.sort((a, b) => b.ret - a.ret);
+
+  if (results.length > 0) {
+    document.getElementById("gainer").innerHTML =
+      `Top Gainer: <span class="green">${results[0].stock}</span>`;
+    document.getElementById("loser").innerHTML =
+      `Top Loser: <span class="red">${results[results.length - 1].stock}</span>`;
+  }
+}
+
+/* ---------------- COMPARE ---------------- */
+async function compare() {
+  const s1 = document.getElementById("s1").value;
+  const s2 = document.getElementById("s2").value;
+
+  if (!s1 || !s2) return;
+
+  const res = await fetch(`${API}/compare?symbol1=${s1}&symbol2=${s2}`);
+  const data = await res.json();
+
+  const winner = data[s1] > data[s2] ? s1 : s2;
+  document.getElementById("compareResult").innerText =
+    `${winner} performed better based on average daily return`;
+}
+
+window.onload = loadCompanies;
+</script>
+
+</body>
+</html>
